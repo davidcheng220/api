@@ -4,3 +4,7 @@ food_vision_ipynnb
 mainmain.py
 food-visison-model.h5
 README.md
+images/
+gcpkey.json
+test.py
+.python-version
