@@ -22,6 +22,7 @@ from fastapi.responses import RedirectResponse
 import json
 from pathlib import Path
 
+
 app = FastAPI()
 
 origins = ["*"]
@@ -95,9 +96,10 @@ async def get_image_prediction(file: UploadFile):
     }
 
     prompt = '''
-    告訴我這是這是甚麼類的垃圾而已 (例如：寶特瓶, 鋁箔包, 塑膠, 牛奶盒, 一般垃圾)並輸出為json
+    告訴我這是這是甚麼類的垃圾而已 (例如：寶特瓶, 鋁箔包, 塑膠, 牛奶盒, 一般垃圾, 玻璃)且敘述信心分數輸出為json
     task1 : 例如看到寶特瓶, 就說寶特瓶
     task2: 如果不是垃圾, 說一般垃圾 JSON,
+    task3: 是便當盒, 說便當盒
     例如1：  {"class_name": "plastic", 
             "recycle": Ture,
             "confidence": 0.98}

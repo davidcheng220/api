@@ -18,7 +18,9 @@ RUN pip install -r requirements.txt
 # Copy every file in the source folder to the created working directory
 COPY  . .
 
+ENV PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+
 EXPOSE 8080
 
 # Run the python application
-CMD ["python", "main.py"]
+CMD ["python3", "-m", "uvicorn", "--host", "0.0.0.0", "--port", "8080", "main:app", "--reload"]

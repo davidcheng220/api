@@ -8,3 +8,4 @@ images/
 gcpkey.json
 test.py
 .python-version
+tmp/
