@@ -1,19 +1,19 @@
 from fastapi import FastAPI, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from tensorflow.keras.models import load_model
-from tensorflow.keras.utils import get_file 
-from tensorflow.keras.utils import load_img 
-from tensorflow.keras.utils import img_to_array
+# from tensorflow.keras.utils import get_file 
+# from tensorflow.keras.utils import load_img 
+# from tensorflow.keras.utils import img_to_array
 from tensorflow.keras.preprocessing import image
-from tensorflow import expand_dims
-from tensorflow.nn import softmax
+# from tensorflow import expand_dims
+# from tensorflow.nn import softmax
 import numpy as np
-from numpy import argmax
-from numpy import max
+# from numpy import argmax
+# from numpy import max
 from numpy import array
-from json import dumps
+# from json import dumps
 from uvicorn import run
-from typing import Annotated
+# from typing import Annotated
 from PIL import Image
 import os
 import io
@@ -21,9 +21,11 @@ from vertexai.generative_models import GenerativeModel, Part
 from fastapi.responses import RedirectResponse
 import json
 from pathlib import Path
+from gcp import WasteService
 
 
 app = FastAPI()
+service = WasteService()
 
 origins = ["*"]
 methods = ["*"]
@@ -73,13 +75,13 @@ async def get_image_prediction(file: UploadFile):
     prediction = predict_image(img)
     confidence = prediction[0]
     class_names = class_predictions
-  # 获取所有类别和对应置信度
+  # 所有可信度
     all_predictions = [
         {"class_name": class_names[i], "confidence": float(confidence[i])}
         for i in range(len(class_names))
     ]
     
-    # 根据置信度排序（可选）
+    # 序列化由高到低
     all_predictions = sorted(all_predictions, key=lambda x: x["confidence"], reverse=True)
     
     return {"predictions": all_predictions}
@@ -88,7 +90,7 @@ async def get_image_prediction(file: UploadFile):
 async def get_image_prediction(file: UploadFile):
     os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = 'gcpkey.json'
     
-    model = GenerativeModel('gemini-1.5-flash-002')
+    model = GenerativeModel('gemini-1.5-pro-002')
 
     generationconfig = {
                         'temperature': 0,
@@ -121,8 +123,30 @@ async def get_image_prediction(file: UploadFile):
         response1 = model.generate_content([prompt,data], generation_config=generationconfig)
 
     res = json.loads(response1.text)
-    
     return res
+
+@app.post("/classify/")
+async def classify_waste(file: UploadFile):
+    """Endpoint to classify waste from uploaded images"""
+    # Create images directory if it doesn't exist
+    IMGDIR = Path("images")
+    IMGDIR.mkdir(exist_ok=True)
+    
+    # Save uploaded file temporarily
+    temp_path = IMGDIR / file.filename
+    # try:
+    content = await file.read()
+    with open(temp_path, "wb") as f:
+        f.write(content)
+    
+    # Process the image
+    result = service.classify(str(temp_path))
+    return result
+    # finally:
+    #     # Clean up temporary file
+    #     if temp_path.exists():
+    #         os.unlink(temp_path)
+
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
