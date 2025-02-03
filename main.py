@@ -1,10 +1,10 @@
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query 
 from fastapi.middleware.cors import CORSMiddleware
-from tensorflow.keras.models import load_model
+from keras.models import load_model
 # from tensorflow.keras.utils import get_file 
 # from tensorflow.keras.utils import load_img 
 # from tensorflow.keras.utils import img_to_array
-from tensorflow.keras.preprocessing import image
+from keras.preprocessing import image
 # from tensorflow import expand_dims
 # from tensorflow.nn import softmax
 import numpy as np
@@ -18,11 +18,13 @@ from PIL import Image
 import os
 import io
 from vertexai.generative_models import GenerativeModel, Part
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 import json
 from pathlib import Path
 from gcp import WasteService
-
+# from yoloapi import *
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+import mysql.connector 
 
 app = FastAPI()
 service = WasteService()
@@ -32,7 +34,9 @@ methods = ["*"]
 headers = ["*"]
 
 app.add_middleware(
-    CORSMiddleware, 
+    CORSMiddleware,
+    # HTTPSRedirectMiddleware,
+    # allow_host=["*"]
     allow_origins = origins,
     allow_credentials = True,
     allow_methods = methods,
@@ -98,10 +102,11 @@ async def get_image_prediction(file: UploadFile):
     }
 
     prompt = '''
-    告訴我這是這是甚麼類的垃圾而已 (例如：寶特瓶, 鋁箔包, 塑膠, 牛奶盒, 一般垃圾, 玻璃)且敘述信心分數輸出為json
+    告訴我這是這是甚麼類的垃圾而已 (例如：寶特瓶, 鋁箔包, 塑膠, 牛奶盒, 一般垃圾, 玻璃, 瓶子)且敘述信心分數輸出為json
     task1 : 例如看到寶特瓶, 就說寶特瓶
-    task2: 如果不是垃圾, 說一般垃圾 JSON,
+    task2: 如果不是垃圾, 說一般垃圾 JSON
     task3: 是便當盒, 說便當盒
+    task4: 信心度請依照你的感覺並說0.90~0.70之間
     例如1：  {"class_name": "plastic", 
             "recycle": Ture,
             "confidence": 0.98}
@@ -148,6 +153,177 @@ async def classify_waste(file: UploadFile):
     #         os.unlink(temp_path)
 
 
+
+def get_db_connection():
+    """
+    請根據實際情況修改此函式，例如使用 mysql.connector.connect 來連線至 MySQL 資料庫。
+    """
+    try:
+        conn = mysql.connector.connect(
+            host="database-1.cnwykisoqb94.ap-northeast-1.rds.amazonaws.com",
+            user="admin",
+            password="#Tibame01",
+            database="trash_2"
+        )
+        return conn
+    except mysql.connector.Error as err:
+        raise Exception(f"資料庫連線錯誤: {err}")
+    
+# 1. 查詢桶子
+@app.get("/get_location")
+async def get_location():
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("select distinct(trash_loc) as 'bins' from trash_box;")
+    result = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return {'result': result}
+
+# 2. 查詢桶子的時間
+@app.get("/bin_time")
+async def get_bin_time(bin1: str = Query(...)):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute(
+                   """
+                   SELECT * FROM trash_box i1 JOIN sensor s1 ON i1.bin_id = s1.trash_box_bin_id 
+                   WHERE i1.trash_loc = %s 
+                   ORDER BY s1.identify_time DESC
+                   """, (bin1,)
+                   )
+    
+    result = cursor.fetchall()
+    
+    cursor.close()
+    conn.close()
+    
+    return {"identify_time": [row["identify_time"] for row in result]}
+
+# 3. 查詢一般垃圾的用量(full/not full)
+@app.get("/for_general_is_full")
+async def is_full(bin1: str = Query(...), time: str = Query(...)):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # 執行 SQL 查詢
+    cursor.execute(
+                    """
+                    select results from trash_box i1 join sensor s1 on i1.bin_id = s1.trash_box_bin_id 
+                    where trash_loc=%s and (identify_time = %s or identify_time < %s) 
+                    and bin_name='一般垃圾' 
+                    order by identify_time limit 1;
+                    """,
+                    (bin1, time, time)
+    )
+
+    result = cursor.fetchone()
+    
+    cursor.close()
+    conn.close()
+
+    return {"result": result["results"] if result else "No data found"}
+
+# 4. 查詢資源回收的用量(full/not full)
+@app.get("/for_recycle_is_full")
+async def for_recycle_is_full(bin1: str = Query(...), time: str = Query(...)):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    # 執行 SQL 查詢
+    cursor.execute(
+                    """
+                    select results from trash_box i1 join sensor s1 on i1.bin_id = s1.trash_box_bin_id 
+                    where trash_loc=%s and (identify_time = %s or identify_time < %s) 
+                    and bin_name='資源回收' 
+                    order by identify_time limit 1;
+                    """,
+                    (bin1, time, time)
+    )
+
+    result = cursor.fetchone()
+    
+    cursor.close()
+    conn.close()
+
+    return {"result": result["results"] if result else "No data found"}
+
+# 5. 查詢今天一般垃圾的滿的狀況
+@app.get("/for_general_others_time", response_model=dict)
+def for_general_others_time(day: str = Query(..., description="查詢的日期，格式例如 '2025-01-01'")):
+    result = []
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(f"SELECT distinct s1.identify_time FROM trash_box b1 JOIN sensor s1 ON b1.bin_id = s1.trash_box_bin_id JOIN img i1 ON s1.trash_box_bin_id = i1.trash_box_bin_id where i1.trash_category = '一般垃圾' and DATE(s1.identify_time) = '{day}' and s1.results='滿' and TIME(s1.identify_time) BETWEEN '09:00:00' AND '10:59:59';")
+    nine_to_eleven = cursor.fetchall()
+    cursor.execute(f"SELECT distinct s1.identify_time FROM trash_box b1 JOIN sensor s1 ON b1.bin_id = s1.trash_box_bin_id JOIN img i1 ON s1.trash_box_bin_id = i1.trash_box_bin_id where i1.trash_category = '一般垃圾' and DATE(s1.identify_time) = '{day}' and s1.results='滿' and TIME(s1.identify_time) BETWEEN '11:00:00' AND '12:59:59';")
+    eleven_to_one = cursor.fetchall()
+    cursor.execute(f"SELECT distinct s1.identify_time FROM trash_box b1 JOIN sensor s1 ON b1.bin_id = s1.trash_box_bin_id JOIN img i1 ON s1.trash_box_bin_id = i1.trash_box_bin_id where i1.trash_category = '一般垃圾' and DATE(s1.identify_time) = '{day}' and s1.results='滿' and TIME(s1.identify_time) BETWEEN '13:00:00' AND '14:59:59';")
+    one_to_three = cursor.fetchall()
+    cursor.execute(f"SELECT distinct s1.identify_time FROM trash_box b1 JOIN sensor s1 ON b1.bin_id = s1.trash_box_bin_id JOIN img i1 ON s1.trash_box_bin_id = i1.trash_box_bin_id where i1.trash_category = '一般垃圾' and DATE(s1.identify_time) = '{day}' and s1.results='滿' and TIME(s1.identify_time) BETWEEN '15:00:00' AND '17:00:00';")
+    three_to_five = cursor.fetchall()
+
+
+    if len(nine_to_eleven) >0:
+        nine_to_eleven = '09:00:00- 11:00:00'
+        result.append(nine_to_eleven)
+    
+    if len(eleven_to_one) > 0:
+        eleven_to_one = '11:00:00- 13:00:00'
+        result.append(eleven_to_one)
+    
+    if len(one_to_three) >0:
+        one_to_three = '13:00:00- 15:00:00'
+        result.append(one_to_three)
+    
+    if len(three_to_five) >0:
+        three_to_five = '15:00:00- 17:00:00'
+        result.append(three_to_five)
+        
+    if len(three_to_five) ==0:
+        a = None
+        result.append(a)
+        
+    return {'result':result}
+
+@app.get("/for_recycle_others_time", response_model=dict)
+def for_recycel_others_time(day: str = Query(..., description="查詢的日期，格式例如 '2025-01-01'")):
+    result = []
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(f"SELECT distinct s1.identify_time FROM trash_box b1 JOIN sensor s1 ON b1.bin_id = s1.trash_box_bin_id JOIN img i1 ON s1.trash_box_bin_id = i1.trash_box_bin_id where i1.trash_category = '資源回收' and DATE(s1.identify_time) = '{day}' and s1.results='滿' and TIME(s1.identify_time) BETWEEN '09:00:00' AND '10:59:59';")
+    nine_to_eleven = cursor.fetchall()
+    cursor.execute(f"SELECT distinct s1.identify_time FROM trash_box b1 JOIN sensor s1 ON b1.bin_id = s1.trash_box_bin_id JOIN img i1 ON s1.trash_box_bin_id = i1.trash_box_bin_id where i1.trash_category = '資源回收' and DATE(s1.identify_time) = '{day}' and s1.results='滿' and TIME(s1.identify_time) BETWEEN '11:00:00' AND '12:59:59';")
+    eleven_to_one = cursor.fetchall()
+    cursor.execute(f"SELECT distinct s1.identify_time FROM trash_box b1 JOIN sensor s1 ON b1.bin_id = s1.trash_box_bin_id JOIN img i1 ON s1.trash_box_bin_id = i1.trash_box_bin_id where i1.trash_category = '資源回收' and DATE(s1.identify_time) = '{day}' and s1.results='滿' and TIME(s1.identify_time) BETWEEN '13:00:00' AND '14:59:59';")
+    one_to_three = cursor.fetchall()
+    cursor.execute(f"SELECT distinct s1.identify_time FROM trash_box b1 JOIN sensor s1 ON b1.bin_id = s1.trash_box_bin_id JOIN img i1 ON s1.trash_box_bin_id = i1.trash_box_bin_id where i1.trash_category = '資源回收' and DATE(s1.identify_time) = '{day}' and s1.results='滿' and TIME(s1.identify_time) BETWEEN '15:00:00' AND '17:00:00';")
+    three_to_five = cursor.fetchall()
+
+
+    if len(nine_to_eleven) >0:
+        nine_to_eleven = '09:00:00- 11:00:00'
+        result.append(nine_to_eleven)
+    
+    if len(eleven_to_one) > 0:
+        eleven_to_one = '11:00:00- 13:00:00'
+        result.append(eleven_to_one)
+    
+    if len(one_to_three) >0:
+        one_to_three = '13:00:00- 15:00:00'
+        result.append(one_to_three)
+    
+    if len(three_to_five) >0:
+        three_to_five = '15:00:00- 17:00:00'
+        result.append(three_to_five)
+        
+    if len(three_to_five) ==0:
+        a = None
+        result.append(a)
+        
+    return {'result':result}
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
     run(app, host="0.0.0.0", port=port)
