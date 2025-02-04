@@ -53,42 +53,42 @@ model = load_model("model_fixed.h5")
 async def root():
      return RedirectResponse(url="/docs")
 
-def predict_image(img: Image.Image):
-    img = img.resize((224, 224))
-    img_array = image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    prediction = model.predict(img_array)
-    return prediction
+# def predict_image(img: Image.Image):
+#     img = img.resize((224, 224))
+#     img_array = image.img_to_array(img)
+#     img_array = np.expand_dims(img_array, axis=0)
+#     prediction = model.predict(img_array)
+#     return prediction
 
-#post method to get prediction, 當檔案傳輸的時候會使用post
-@app.post("/predict/")
-async def get_image_prediction(file: UploadFile):
-    img = Image.open(io.BytesIO(await file.read()))
-    prediction = predict_image(img)
-    confidence = prediction[0]
+# #post method to get prediction, 當檔案傳輸的時候會使用post
+# @app.post("/predict/")
+# async def get_image_prediction(file: UploadFile):
+#     img = Image.open(io.BytesIO(await file.read()))
+#     prediction = predict_image(img)
+#     confidence = prediction[0]
 
-    predicted_index = np.argmax(confidence)
-    class_names = class_predictions
-    predicted_class = class_names[predicted_index]
-    confidence = confidence[(predicted_index)]
-    return {"class_name": predicted_class, "confidence": float(confidence)}
+#     predicted_index = np.argmax(confidence)
+#     class_names = class_predictions
+#     predicted_class = class_names[predicted_index]
+#     confidence = confidence[(predicted_index)]
+#     return {"class_name": predicted_class, "confidence": float(confidence)}
     
-@app.post("/predict-all/")
-async def get_image_prediction(file: UploadFile):
-    img = Image.open(io.BytesIO(await file.read()))
-    prediction = predict_image(img)
-    confidence = prediction[0]
-    class_names = class_predictions
-  # 所有可信度
-    all_predictions = [
-        {"class_name": class_names[i], "confidence": float(confidence[i])}
-        for i in range(len(class_names))
-    ]
+# @app.post("/predict-all/")
+# async def get_image_prediction(file: UploadFile):
+#     img = Image.open(io.BytesIO(await file.read()))
+#     prediction = predict_image(img)
+#     confidence = prediction[0]
+#     class_names = class_predictions
+#   # 所有可信度
+#     all_predictions = [
+#         {"class_name": class_names[i], "confidence": float(confidence[i])}
+#         for i in range(len(class_names))
+#     ]
     
-    # 序列化由高到低
-    all_predictions = sorted(all_predictions, key=lambda x: x["confidence"], reverse=True)
+#     # 序列化由高到低
+#     all_predictions = sorted(all_predictions, key=lambda x: x["confidence"], reverse=True)
     
-    return {"predictions": all_predictions}
+#     return {"predictions": all_predictions}
 
 @app.post("/gcp-llm/")
 async def get_image_prediction(file: UploadFile):
